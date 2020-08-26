@@ -1,0 +1,1 @@
+This directory contains scripts to train simple dialect identification model like Naïve Bayes or SVM. These models were tested as a first dialect identification attempt, but dropped since their performance is lower than BERT. 
