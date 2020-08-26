@@ -1,6 +1,6 @@
 # Dialect identification for Swiss-German
 
-This repository contains a BERT model to identify Swiss-German dialects. We use the 'bert-base-german-cased' pretrained model and fine-tune it on labelled Swiss-German sentences. Labelled GSW sentences can be obtained for example using the Twitter streamer (https://github.com/Karexar/twitter_streamer).
+This repository contains a BERT model to identify Swiss-German dialects. We use the 'bert-base-german-cased' pretrained model and fine-tune it on labelled Swiss-German sentences. Labelled GSW sentences can be obtained for example using the Twitter streamer (https://github.com/Karexar/twitter_streamer). The dialect is inferred from the Swiss state ("canton") the Twitter user lives in, when this information is available. 
 
 ## Installation
 
