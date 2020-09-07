@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import torch
 from torch.utils.data import random_split
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
@@ -11,6 +12,8 @@ class DataManager:
                  data_dir,
                  tokenizer,
                  batch_size,
+                 soft_labels=False,
+                 weight_soft=1.0,
                  sep="\t",
                  dev_ratio=0.1,
                  label_names=None):
@@ -22,8 +25,9 @@ class DataManager:
         self.tokenizer = tokenizer
         self.batch_size = batch_size
         self.labels_str = label_names
-        # Train set
+
         if not data_dir is None:
+            # Load the train set
             df_train = pd.read_csv(os.path.join(data_dir, "train.csv"),
                                         sep=sep,
                                         names=["Text", "Label"])
@@ -39,43 +43,75 @@ class DataManager:
                 print(f"Train+Dev set size : {df_train.shape[0]}")
             # Get the lists of sentences and their labels.
             self.train_sentences = df_train.Text.values
-            train_labels_str = list(df_train.Label.values)
+            if soft_labels:
+                self.train_labels = np.array(
+                                    [np.array([float(y) for y in x.split(',')])
+                                     for x in df_train.Label.values])
+            else:
+                train_labels_str = list(df_train.Label.values)
 
-            # Test set
+            # Load the test set
             df_test = pd.read_csv(os.path.join(data_dir, "test.csv"),
                                    sep=sep,
                                    names=["Text", "Label"])
             print(f"Test set size : {df_test.shape[0]}")
             # Create sentence and label lists
             self.test_sentences = df_test.Text.values
-            test_labels_str = list(df_test.Label.values)
 
-            labels_str_from_data = sorted(list(set(train_labels_str +
-                                                   test_labels_str)))
-            if label_names is None:
-                self.labels_str = labels_str_from_data
+            if soft_labels:
+                self.test_labels = np.array(
+                                   [np.array([float(y) for y in x.split(',')])
+                                    for x in df_test.Label.values])
             else:
-                # Check if the given labels names match the labels names
-                # inferred from the data, which may not be the case if the
-                # evaluation dataset does not contains all labels found during
-                # finetuning on the training set.
-                if len(self.labels_str) != len(labels_str_from_data):
-                    print("WARNING : given label names count " +
-                          f"({len(self.labels_str)}) does not match inferred " +
-                          f"label count ({len(labels_str_from_data)})")
+                test_labels_str = list(df_test.Label.values)
+                labels_str_from_data = sorted(list(set(train_labels_str +
+                                                       test_labels_str)))
+                if label_names is None:
+                    self.labels_str = labels_str_from_data
+                else:
+                    # Check if the given labels names match the labels names
+                    # inferred from the data, which may not be the case if the
+                    # evaluation dataset does not contains all labels found
+                    # during finetuning on the training set.
+                    if len(self.labels_str) != len(labels_str_from_data):
+                        print("WARNING : given label names count " +
+                              f"({len(self.labels_str)}) does not match " +
+                              f"inferred label count (" +
+                              f"{len(labels_str_from_data)})")
+                              
+        if soft_labels:
+            self.labels_count = len(label_names)
+            self.label_int_to_str = dict()
+            for i in range(self.labels_count):
+                self.label_int_to_str[i] = self.labels_str[i]
+            # interpolate the logits with the hard label predicted if
+            # weight_soft is not 1
+            if weight_soft < 1:
+                hard_labels_test = np.array([[0 if i != np.argmax(x) else 1
+                                              for i in range(len(x))]
+                                             for x in self.test_labels])
+                hard_labels_train = np.array([[0 if i != np.argmax(x) else 1
+                                              for i in range(len(x))]
+                                             for x in self.train_labels])
+                self.test_labels = list((weight_soft*(self.test_labels) +
+                                        (1-weight_soft) * hard_labels_test))
+                self.train_labels = list((weight_soft*(self.train_labels) +
+                                         (1-weight_soft) * hard_labels_train))
+        else:
+            self.labels_count = len(self.labels_str)
+            print(f'Number of labels: {self.labels_count}')
 
-        self.labels_count = len(self.labels_str)
-        print(f'Number of labels: {self.labels_count}')
+            label_str_to_int = dict()
+            self.label_int_to_str = dict()
+            for i in range(self.labels_count):
+                label_str_to_int[self.labels_str[i]] = i
+                self.label_int_to_str[i] = self.labels_str[i]
 
-        label_str_to_int = dict()
-        self.label_int_to_str = dict()
-        for i in range(self.labels_count):
-            label_str_to_int[self.labels_str[i]] = i
-            self.label_int_to_str[i] = self.labels_str[i]
-
-        if not data_dir is None:
-            self.train_labels = [label_str_to_int[x] for x in train_labels_str]
-            self.test_labels = [label_str_to_int[x] for x in test_labels_str]
+            if not data_dir is None:
+                self.train_labels = [label_str_to_int[x]
+                                     for x in train_labels_str]
+                self.test_labels = [label_str_to_int[x]
+                                    for x in test_labels_str]
 
 
     def prepare_train_eval_dataloader(self,
@@ -117,11 +153,22 @@ class DataManager:
                                     batch_size = self.batch_size
                                 )
 
+    def int_to_vec(value, size):
+        res = []
+        for i in range(size):
+            if value == i:
+                res.append(1.0)
+            else:
+                res.append(0.0)
+        return res
+
     def prepare_test_dataloader(self, sentence_length):
         # Tokenize the test sentences
         input_ids, attention_masks = self.tokenizer.tokenize(self.test_sentences,
                                                              sentence_length)
 
+
+        #self.test_labels = [int_to_vec(x, 7) for x in self.test_labels]
         labels = torch.tensor(self.test_labels)
 
         # Create the DataLoader.
@@ -130,6 +177,7 @@ class DataManager:
         self.test_dataloader = DataLoader(prediction_data,
                                            sampler=prediction_sampler,
                                            batch_size=self.batch_size)
+
 
     def prepare_predict_dataloader(self, sentences, sentence_length):
         # Tokenize the test sentences

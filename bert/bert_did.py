@@ -7,6 +7,7 @@ from transformers import get_linear_schedule_with_warmup
 from sklearn.metrics import accuracy_score, recall_score, f1_score
 from sklearn.metrics import precision_score
 from loss_functions.focalloss import FocalLoss
+from loss_functions.smooth_labels import LabelSmoothingCrossEntropy
 import numpy as np
 import pandas as pd
 import random
@@ -33,6 +34,8 @@ class BertDid:
                  batch_size=32,
                  cuda_device=0,
                  label_names=None,
+                 soft_labels=False,
+                 weight_soft=1.0,
                  focal_loss_gamma=0.0,
                  focal_loss_alpha=None):
 
@@ -45,7 +48,7 @@ class BertDid:
 
         # Prepare the GPU
         self.device = None
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and cuda_device is not None:
             self.device = torch.device("cuda")
             torch.cuda.set_device(cuda_device)
             print(f'Using GPU: {torch.cuda.current_device()}')
@@ -72,8 +75,10 @@ class BertDid:
         self.data_manager = DataManager(data_dir,
                                         self.tokenizer,
                                         batch_size,
-                                        label_names=label_names)
-
+                                        label_names=label_names,
+                                        soft_labels=soft_labels,
+                                        weight_soft=weight_soft)
+        self.soft_labels = soft_labels
 
     def load(self, model_dir):
         """Load an existing model and tokenizer
@@ -117,6 +122,8 @@ class BertDid:
             labels | list[list[int]]
                 The list of label indices
         """
+        if self.soft_labels:
+            labels =  np.argmax(labels, axis=1).flatten()
         pred_flat = np.argmax(preds, axis=1).flatten()
         labels_flat = labels.flatten()
         return np.sum(pred_flat == labels_flat) / len(labels_flat)
@@ -273,9 +280,13 @@ class BertDid:
                                     attention_mask=b_input_mask)
                 logits = logits[0]
                 loss_fct = FocalLoss(gamma=self.classifier.focal_loss_gamma,
-                                     alpha=self.classifier.focal_loss_alpha)
+                                     alpha=self.classifier.focal_loss_alpha,
+                                     soft_labels=self.soft_labels)
+                labels = b_labels
+                if not self.soft_labels:
+                    labels = b_labels.view(-1)
                 loss = loss_fct(logits.view(-1, self.data_manager.labels_count),
-                                b_labels.view(-1))
+                                labels)
 
 
 
@@ -365,9 +376,13 @@ class BertDid:
                                         attention_mask=b_input_mask)
                     logits = logits[0]
                     loss_fct = FocalLoss(gamma=self.classifier.focal_loss_gamma,
-                                         alpha=self.classifier.focal_loss_alpha)
+                                         alpha=self.classifier.focal_loss_alpha,
+                                         soft_labels=self.soft_labels)
+                    labels = b_labels
+                    if not self.soft_labels:
+                        labels = b_labels.view(-1)
                     loss = loss_fct(logits.view(-1, self.data_manager.labels_count),
-                                    b_labels.view(-1))
+                                    labels)
 
                 # Accumulate the validation loss.
                 total_eval_loss += loss.item()
@@ -459,7 +474,10 @@ class BertDid:
             for j in range(len(predictions[i])):
                 pred = self.data_manager.label_int_to_str[np.argmax(predictions[i][j])]
                 pred_list.append(pred)
-                true_value = self.data_manager.label_int_to_str[true_labels[i][j]]
+                if self.soft_labels:
+                    true_value = self.data_manager.label_int_to_str[np.argmax(true_labels[i][j])]
+                else:
+                    true_value = self.data_manager.label_int_to_str[true_labels[i][j]]
                 true_list.append(true_value)
 
         # Print the scores
@@ -560,8 +578,9 @@ class BertDid:
             # Store predictions
             predictions.append(logits)
 
-        predictions = [np.exp(x)/sum(np.exp(x)) for y in predictions for x in y]
-        return (self.data_manager.labels_str, predictions)
+        probabilities = [np.exp(x)/sum(np.exp(x))
+                            for y in predictions for x in y]
+        return (self.data_manager.labels_str, probabilities)
 
 
 if __name__ == '__main__':
@@ -584,7 +603,7 @@ if __name__ == '__main__':
                        type=str,
                        help="Directory where to load/save the finetuned model")
     group.add_argument('--cuda_device',
-                       default=0,
+                       default=None,
                        type=int,
                        help="Cuda device index to use")
     group.add_argument('--sentence_length',
@@ -599,7 +618,7 @@ if __name__ == '__main__':
     group.add_argument('--epochs',
                        type=int,
                        default=3,
-                       help="Batch size for training (2, 3, or 4 recommended)")
+                       help="Epochs for training (2, 3, or 4 recommended)")
     group.add_argument('--learning_rate',
                        type=float,
                        default=2e-5,
@@ -626,6 +645,16 @@ if __name__ == '__main__':
                        action='store_true',
                        help="Whether or not to compute the encoded max " +
                             "sentence length")
+    group.add_argument('--soft_labels',
+                       dest='soft_labels',
+                       action='store_true',
+                       help="Whether or not to use soft labels to train the " +
+                            "model")
+    group.add_argument('--weight_soft',
+                       type=float,
+                       default=0.0,
+                       help="Weight given to the soft label predicted for " +
+                       "interpolation with the hard label predicted")
     group.add_argument('--focal_loss_gamma',
                        type=float,
                        default=0.0,
@@ -646,6 +675,10 @@ if __name__ == '__main__':
                        "the labels used for training")
 
     cli_args = parser.parse_args()
+
+    if cli_args.soft_labels and cli_args.label_names is None:
+        raise ValueError("label_names must be provided when soft labels are " +
+                         "used")
 
     if cli_args.fine_tune_model:
         Path(cli_args.model_dir).mkdir(parents=True, exist_ok=True)
@@ -676,6 +709,8 @@ if __name__ == '__main__':
                        cli_args.batch_size,
                        cli_args.cuda_device,
                        label_names,
+                       cli_args.soft_labels,
+                       cli_args.weight_soft,
                        cli_args.focal_loss_gamma,
                        cli_args.focal_loss_alpha)
 

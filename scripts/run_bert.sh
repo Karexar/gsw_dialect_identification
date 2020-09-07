@@ -14,7 +14,7 @@ python3.7 -u -m bert.bert_did \
 
 
       # --data_dir "data/mix3" \
-      #--label_names "BE,CE,EA,GR,NW,RO,VS,ZH"
+      #--label_names "BE,CE,EA,GR,NW,VS,ZH"
       #--compute_max_length
       #--fine_tune_model \
       #--focal_loss_alpha 4.5 5.6 25.5 63.8 12.7 354.8 465.0 2.2

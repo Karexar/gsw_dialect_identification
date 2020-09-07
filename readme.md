@@ -1,6 +1,6 @@
 # Dialect identification for Swiss-German
 
-This repository contains a BERT model to identify Swiss-German dialects. We use the 'bert-base-german-cased' pretrained model and fine-tune it on labelled Swiss-German sentences. Labelled GSW sentences can be obtained for example using the Twitter streamer (https://github.com/Karexar/twitter_streamer). The dialect is inferred from the Swiss state ("canton") the Twitter user lives in, when this information is available. 
+This repository contains a BERT model to identify Swiss-German dialects. We use the 'bert-base-german-cased' pretrained model and fine-tune it on labelled Swiss-German sentences. Labelled GSW sentences can be obtained for example using the Twitter streamer (https://github.com/Karexar/twitter_streamer). The dialect is inferred from the Swiss state ("canton") the Twitter user lives in, when this information is available.
 
 ## Installation
 
@@ -60,6 +60,19 @@ python -m self_learning.merge_predicted
 ```
 
 Now you can fine-tune the model with the new data.
+
+## Soft-labels
+
+Swiss-German dialects are hard to differentiate. A classification based on the Swiss state the user lives in is not very accurate. We may have people living and working at different places, or that moved on to somewhere else. In either case, there is not only one dialect for this user. Soft-label are used in the following way. First we predict the dialect for all sentences in the dataset and we keep the logits.
+
+```zsh
+python -m soft_labels.predict_sentences
+```
+
+Then we fine-tune the model on the new dataset using the options --soft_label and --weight_soft <weight>. the first is to indicate we want to fine-tune using soft-labels. The second is to indicate the weight to give to soft label, with respect to hard label. A value of 1 indicates we take only the soft labels. 0 will produce the same result as with hard labels. A value in-between will compute an interpolation between the soft labels and hard label.
+
+The classifier can be slightly improved by fine-tuning on the combination of known labels as hard labels (e.g. [0, 1, 0, 0, 0, 0, 0]) and the predicted labels as soft labels (e.g. [0.1, 0.6, 0.2, 0.1, 0.0, 0.0, 0.0]) with a weight of 0.8 for soft labels. 
+
 
 ## Notes
 
